@@ -2,6 +2,10 @@
 
 A powerful bot for automating MoneyToon tasks with proxy support.
 
+## Registration
+
+Register for MoneyToon here: [MoneyToon Registration](https://t.me/moneytoon_bot/myApp?startapp=6D3A3E)
+
 ## Features
 
 - Automatic daily check-in
@@ -39,10 +43,6 @@ A powerful bot for automating MoneyToon tasks with proxy support.
    - Create `proxies.txt`
    - Add proxies in format: `ip:port:username:password`
    - Example: `127.0.0.1:8080:user:pass`
-
-## Registration
-
-Register for MoneyToon here: [MoneyToon Registration](https://t.me/moneytoon_bot/myApp?startapp=6D3A3E)
 
 ## Usage
 
