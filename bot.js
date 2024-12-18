@@ -6,7 +6,6 @@ const moment = require('moment-timezone');
 class MoneyToon {
     constructor() {
         this.proxies = [];
-        this.proxyIndex = 0;
         this.headers = {
             'Accept': 'application/json, text/plain, */*',
             'Accept-Language': 'en-US,en;q=0.9',
@@ -25,31 +24,23 @@ class MoneyToon {
     async loadProxies() {
         try {
             const data = await fs.readFile('proxies.txt', 'utf8');
-            this.proxies = data.split('\\n').filter(line => line.trim());
-            console.log(chalk.green(`Loaded ${this.proxies.length} proxies`));
-        } catch (error) {
-            console.error(chalk.red('Error loading proxies:', error.message));
-            process.exit(1);
-        }
-    }
-
-    getNextProxy() {
-        if (this.proxies.length === 0) return null;
-        const proxy = this.proxies[this.proxyIndex].trim();
-        this.proxyIndex = (this.proxyIndex + 1) % this.proxies.length;
-        
-        try {
-            const [host, port] = proxy.split(':');
-            if (host && port) {
-                return {
-                    host: host,
-                    port: parseInt(port)
-                };
+            this.proxies = data.split('\n')
+                .map(line => line.trim())
+                .filter(line => line.length > 0);
+                
+            if (this.proxies.length === 0) {
+                this.log(chalk.yellow('No proxies found. Bot will run without proxies.'));
+            } else {
+                this.log(chalk.green(`Loaded ${this.proxies.length} proxies`));
             }
         } catch (error) {
-            this.log(chalk.red(`Invalid proxy format: ${proxy}`));
+            if (error.code === 'ENOENT') {
+                this.log(chalk.yellow('proxies.txt not found. Bot will run without proxies.'));
+            } else {
+                this.log(chalk.red(`Error loading proxies: ${error.message}`));
+            }
+            this.proxies = [];
         }
-        return null;
     }
 
     createAxiosInstance(token, accountIndex) {
@@ -70,10 +61,44 @@ class MoneyToon {
                 'Sec-Fetch-Site': 'same-origin',
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0'
             },
-            timeout: 10000
+            timeout: 30000  // 增加超时时间到30秒
         };
 
-        return axios.create(config);
+        // 使用代理
+        if (this.proxies.length > 0 && accountIndex < this.proxies.length) {
+            const proxy = this.proxies[accountIndex].trim();
+            try {
+                const [host, port] = proxy.split(':');
+                if (host && port) {
+                    config.proxy = {
+                        host: host,
+                        port: parseInt(port),
+                        protocol: 'http'  // 明确指定协议
+                    };
+                    this.log(chalk.blue(`Account ${accountIndex + 1} using proxy: ${host}:${port}`));
+                }
+            } catch (error) {
+                this.log(chalk.red(`Invalid proxy format for account ${accountIndex + 1}: ${proxy}`));
+            }
+        }
+
+        const instance = axios.create(config);
+        
+        // 添加响应拦截器处理错误
+        instance.interceptors.response.use(
+            response => response,
+            error => {
+                if (error.response) {
+                    throw new Error(`HTTP ${error.response.status}: ${error.response.data?.message || 'Unknown error'}`);
+                } else if (error.request) {
+                    throw new Error(error.message || 'Network error');
+                } else {
+                    throw error;
+                }
+            }
+        );
+
+        return instance;
     }
 
     log(message) {
@@ -84,9 +109,23 @@ class MoneyToon {
     async loadQueries() {
         try {
             const data = await fs.readFile('query.txt', 'utf8');
-            return data.split('\\n').filter(line => line.trim());
+            const queries = data.split('\n')
+                .map(line => line.trim())
+                .filter(line => line.length > 0);
+            
+            if (queries.length === 0) {
+                this.log(chalk.red('No accounts found in query.txt'));
+            } else {
+                this.log(chalk.green(`Found ${queries.length} accounts in query.txt`));
+            }
+            
+            return queries;
         } catch (error) {
-            console.error(chalk.red('Error loading queries:', error.message));
+            if (error.code === 'ENOENT') {
+                this.log(chalk.red('query.txt file not found. Please create it with your account information.'));
+            } else {
+                this.log(chalk.red(`Error loading queries: ${error.message}`));
+            }
             return [];
         }
     }
@@ -315,19 +354,59 @@ class MoneyToon {
         return null;
     }
 
-    async processAccount(account, index) {
+    async processAccount(account, accountIndex) {
+        let currentProxyIndex = accountIndex;
+        let retryCount = 0;
+        const maxRetries = 3;  // 最多尝试3个不同的代理
+
+        while (retryCount < maxRetries) {
+            try {
+                // 使用当前代理创建请求实例
+                const axiosInstance = this.createAxiosInstance(account.token, currentProxyIndex);
+                
+                // 尝试进行请求
+                await this.processAccountTasks(axiosInstance, account);
+                break;  // 如果成功，跳出重试循环
+                
+            } catch (error) {
+                this.log(chalk.red(`Error with account ${account.first_name} using proxy ${currentProxyIndex + 1}: ${error.message}`));
+                
+                // 如果是代理错误，尝试下一个代理
+                if (error.message.includes('ECONNREFUSED') || 
+                    error.message.includes('socket disconnected') || 
+                    error.message.includes('ETIMEDOUT')) {
+                    
+                    retryCount++;
+                    // 循环使用下一个可用的代理
+                    currentProxyIndex = (currentProxyIndex + 1) % this.proxies.length;
+                    
+                    if (retryCount < maxRetries) {
+                        this.log(chalk.yellow(`Switching to proxy ${currentProxyIndex + 1} for account ${account.first_name}`));
+                        await new Promise(resolve => setTimeout(resolve, 2000));  // 等待2秒后重试
+                        continue;
+                    }
+                }
+                
+                // 如果重试次数用完或不是代理错误，记录错误并继续处理下一个账号
+                this.log(chalk.red(`Failed to process account ${account.first_name} after ${retryCount} retries`));
+                break;
+            }
+        }
+    }
+
+    async processAccountTasks(axiosInstance, account) {
         this.log(chalk.cyan(`Processing account: ${account.first_name}`));
         
         // Check points
-        const points = await this.userPoints(account.token, index);
+        const points = await this.userPoints(account.token, 0);
         if (points) {
             this.log(chalk.green(`Current points: ${points.point}`));
         }
 
         // Daily attendance
-        const attendance = await this.userAttendance(account.token, index);
+        const attendance = await this.userAttendance(account.token, 0);
         if (attendance && !attendance.isAttend) {
-            const claim = await this.claimAttendance(account.token, index);
+            const claim = await this.claimAttendance(account.token, 0);
             if (claim) {
                 this.log(chalk.green(`Daily check-in success! Earned ${claim.point || 0} points`));
             }
@@ -336,10 +415,10 @@ class MoneyToon {
         }
 
         // Process games
-        await this.processGames(account.token, index);
+        await this.processGames(account.token, 0);
 
         // Process tasks
-        const tasks = await this.tasksList(account.token, index);
+        const tasks = await this.tasksList(account.token, 0);
         if (tasks && Array.isArray(tasks)) {
             let completedTask = false;
             for (const task of tasks) {
@@ -348,12 +427,12 @@ class MoneyToon {
                 const completed = task.completeCount;
 
                 if (task && status === null) {
-                    const start = await this.startTask(account.token, index, taskId);
+                    const start = await this.startTask(account.token, 0, taskId);
                     if (start) {
                         this.log(chalk.green(`Starting task: ${task.taskMainTitle}`));
                         await new Promise(resolve => setTimeout(resolve, 2000));
 
-                        const claim = await this.claimTask(account.token, index, taskId);
+                        const claim = await this.claimTask(account.token, 0, taskId);
                         if (claim) {
                             this.log(chalk.green(`Task completed: ${task.taskMainTitle}, earned ${claim.point || 0} points, ${claim.egg || 0} eggs`));
                         } else {
@@ -364,7 +443,7 @@ class MoneyToon {
                     }
                     await new Promise(resolve => setTimeout(resolve, 2000));
                 } else if (task && status === 'S' && completed === 0) {
-                    const claim = await this.claimTask(account.token, index, taskId);
+                    const claim = await this.claimTask(account.token, 0, taskId);
                     if (claim) {
                         this.log(chalk.green(`Task completed: ${task.taskMainTitle}, earned ${claim.point || 0} points, ${claim.egg || 0} eggs`));
                     } else {
@@ -437,19 +516,22 @@ class MoneyToon {
         let tokens = await this.loadTokens();
         let runCount = 0;
         
-        // Generate token
+        // Generate token for accounts that don't have one
         for (let i = 0; i < queries.length; i++) {
             const query = queries[i];
             const accountData = this.loadData(query);
             const accountName = accountData.first_name;
-            const existingAccount = tokens.find(acc => acc.first_name === accountName);
+            const existingToken = tokens.find(t => t.first_name === accountName);
             
-            if (!existingAccount) {
+            if (!existingToken) {
                 this.log(chalk.yellow(`Generating token for account ${accountName}...`));
                 const token = await this.userLogin(query);
                 
                 if (token) {
-                    tokens.push(token);
+                    tokens.push({
+                        first_name: accountName,
+                        token: token
+                    });
                     await this.saveTokens(tokens);
                     this.log(chalk.green(`Successfully generated token for ${accountName}`));
                 } else {
@@ -464,25 +546,71 @@ class MoneyToon {
                 this.log(chalk.cyan(`Starting run #${runCount}`));
                 
                 // Process each account
-                for (let i = 0; i < tokens.length; i++) {
+                for (const query of queries) {
                     try {
-                        await this.processAccount(tokens[i], i);
+                        const accountData = this.loadData(query);
+                        const accountName = accountData.first_name;
+                        const accountToken = tokens.find(t => t.first_name === accountName);
+                        
+                        if (!accountToken) {
+                            this.log(chalk.red(`No token found for account ${accountName}`));
+                            continue;
+                        }
+
+                        const accountIndex = queries.indexOf(query);
+                        await this.processAccount({
+                            first_name: accountName,
+                            token: accountToken.token
+                        }, accountIndex);
+                        
                     } catch (error) {
-                        this.log(chalk.red(`Error processing account ${tokens[i].first_name}: ${error.message}`));
+                        if (error.message.includes('Authentication failed')) {
+                            // 如果是认证错误，重新获取token
+                            const accountData = this.loadData(query);
+                            const accountName = accountData.first_name;
+                            this.log(chalk.yellow(`Token expired for ${accountName}, regenerating...`));
+                            
+                            const newToken = await this.userLogin(query);
+                            if (newToken) {
+                                // 更新tokens数组中的token
+                                const index = tokens.findIndex(t => t.first_name === accountName);
+                                if (index !== -1) {
+                                    tokens[index].token = newToken;
+                                } else {
+                                    tokens.push({
+                                        first_name: accountName,
+                                        token: newToken
+                                    });
+                                }
+                                await this.saveTokens(tokens);
+                                this.log(chalk.green(`Successfully regenerated token for ${accountName}`));
+                                
+                                // 使用新token重试
+                                await this.processAccount({
+                                    first_name: accountName,
+                                    token: newToken
+                                }, queries.indexOf(query));
+                            }
+                        } else {
+                            this.log(chalk.red(`Error processing account: ${error.message}`));
+                        }
                         continue;
                     }
+                    
+                    // 账户处理完成后等待5秒
+                    await new Promise(resolve => setTimeout(resolve, 5000));
                 }
                 
-                // Calculate next run time
+                // 计算下次运行时间
                 const now = new Date();
-                const nextRun = new Date(now.getTime() + 60 * 60 * 1000); // 1 hour later
+                const nextRun = new Date(now.getTime() + 60 * 60 * 1000); // 1小时后
                 
                 this.log(chalk.blue('-----------------------------------'));
                 this.log(chalk.green('✓ All tasks completed successfully'));
                 this.log(chalk.yellow(`Next run scheduled at: ${nextRun.toLocaleTimeString()}`));
                 this.log(chalk.blue('-----------------------------------'));
                 
-                // Wait for 1 hour before next check
+                // 等待1小时后再次运行
                 await new Promise(resolve => setTimeout(resolve, 60 * 60 * 1000));
                 
             } catch (error) {
