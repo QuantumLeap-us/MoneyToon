@@ -61,10 +61,10 @@ class MoneyToon {
                 'Sec-Fetch-Site': 'same-origin',
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0'
             },
-            timeout: 30000  // 增加超时时间到30秒
+            timeout: 30000  // Increase timeout to 30 seconds
         };
 
-        // 使用代理
+        // Use proxy
         if (this.proxies.length > 0 && accountIndex < this.proxies.length) {
             const proxy = this.proxies[accountIndex].trim();
             try {
@@ -73,7 +73,7 @@ class MoneyToon {
                     config.proxy = {
                         host: host,
                         port: parseInt(port),
-                        protocol: 'http'  // 明确指定协议
+                        protocol: 'http'  // Specify protocol
                     };
                     this.log(chalk.blue(`Account ${accountIndex + 1} using proxy: ${host}:${port}`));
                 }
@@ -84,7 +84,7 @@ class MoneyToon {
 
         const instance = axios.create(config);
         
-        // 添加响应拦截器处理错误
+        // Add response interceptor to handle errors
         instance.interceptors.response.use(
             response => response,
             error => {
@@ -357,37 +357,37 @@ class MoneyToon {
     async processAccount(account, accountIndex) {
         let currentProxyIndex = accountIndex;
         let retryCount = 0;
-        const maxRetries = 3;  // 最多尝试3个不同的代理
+        const maxRetries = 3;  // Maximum 3 proxy retries
 
         while (retryCount < maxRetries) {
             try {
-                // 使用当前代理创建请求实例
+                // Create axios instance with current proxy
                 const axiosInstance = this.createAxiosInstance(account.token, currentProxyIndex);
                 
-                // 尝试进行请求
+                // Attempt request
                 await this.processAccountTasks(axiosInstance, account);
-                break;  // 如果成功，跳出重试循环
+                break;  // If successful, exit retry loop
                 
             } catch (error) {
                 this.log(chalk.red(`Error with account ${account.first_name} using proxy ${currentProxyIndex + 1}: ${error.message}`));
                 
-                // 如果是代理错误，尝试下一个代理
+                // If proxy error, try next proxy
                 if (error.message.includes('ECONNREFUSED') || 
                     error.message.includes('socket disconnected') || 
                     error.message.includes('ETIMEDOUT')) {
                     
                     retryCount++;
-                    // 循环使用下一个可用的代理
+                    // Cycle through available proxies
                     currentProxyIndex = (currentProxyIndex + 1) % this.proxies.length;
                     
                     if (retryCount < maxRetries) {
                         this.log(chalk.yellow(`Switching to proxy ${currentProxyIndex + 1} for account ${account.first_name}`));
-                        await new Promise(resolve => setTimeout(resolve, 2000));  // 等待2秒后重试
+                        await new Promise(resolve => setTimeout(resolve, 2000));  // Wait 2 seconds before retrying
                         continue;
                     }
                 }
                 
-                // 如果重试次数用完或不是代理错误，记录错误并继续处理下一个账号
+                // If max retries reached or not proxy error, log error and continue to next account
                 this.log(chalk.red(`Failed to process account ${account.first_name} after ${retryCount} retries`));
                 break;
             }
@@ -545,7 +545,7 @@ class MoneyToon {
                 runCount++;
                 this.log(chalk.cyan(`Starting run #${runCount}`));
                 
-                // Process each account
+                // Process each account sequentially
                 for (const query of queries) {
                     try {
                         const accountData = this.loadData(query);
@@ -557,6 +557,7 @@ class MoneyToon {
                             continue;
                         }
 
+                        // Get account index for proxy assignment
                         const accountIndex = queries.indexOf(query);
                         await this.processAccount({
                             first_name: accountName,
@@ -565,14 +566,14 @@ class MoneyToon {
                         
                     } catch (error) {
                         if (error.message.includes('Authentication failed')) {
-                            // 如果是认证错误，重新获取token
+                            // If authentication fails, regenerate token
                             const accountData = this.loadData(query);
                             const accountName = accountData.first_name;
                             this.log(chalk.yellow(`Token expired for ${accountName}, regenerating...`));
                             
                             const newToken = await this.userLogin(query);
                             if (newToken) {
-                                // 更新tokens数组中的token
+                                // Update token in tokens array
                                 const index = tokens.findIndex(t => t.first_name === accountName);
                                 if (index !== -1) {
                                     tokens[index].token = newToken;
@@ -585,7 +586,7 @@ class MoneyToon {
                                 await this.saveTokens(tokens);
                                 this.log(chalk.green(`Successfully regenerated token for ${accountName}`));
                                 
-                                // 使用新token重试
+                                // Retry with new token
                                 await this.processAccount({
                                     first_name: accountName,
                                     token: newToken
@@ -597,20 +598,20 @@ class MoneyToon {
                         continue;
                     }
                     
-                    // 账户处理完成后等待5秒
+                    // Wait 5 seconds between accounts
                     await new Promise(resolve => setTimeout(resolve, 5000));
                 }
                 
-                // 计算下次运行时间
+                // Calculate next run time
                 const now = new Date();
-                const nextRun = new Date(now.getTime() + 60 * 60 * 1000); // 1小时后
+                const nextRun = new Date(now.getTime() + 60 * 60 * 1000); // 1 hour later
                 
                 this.log(chalk.blue('-----------------------------------'));
                 this.log(chalk.green('✓ All tasks completed successfully'));
                 this.log(chalk.yellow(`Next run scheduled at: ${nextRun.toLocaleTimeString()}`));
                 this.log(chalk.blue('-----------------------------------'));
                 
-                // 等待1小时后再次运行
+                // Wait 1 hour before next run
                 await new Promise(resolve => setTimeout(resolve, 60 * 60 * 1000));
                 
             } catch (error) {
