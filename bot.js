@@ -425,6 +425,7 @@ class MoneyToon {
     }
 
     async main() {
+        this.log(chalk.green('Bot started in continuous mode'));
         await this.loadProxies();
         const queries = await this.loadQueries();
         
@@ -432,15 +433,15 @@ class MoneyToon {
             this.log(chalk.red('No account information found'));
             return;
         }
-
+        
         let tokens = await this.loadTokens();
+        let runCount = 0;
         
         // Generate token
         for (let i = 0; i < queries.length; i++) {
             const query = queries[i];
             const accountData = this.loadData(query);
             const accountName = accountData.first_name;
-
             const existingAccount = tokens.find(acc => acc.first_name === accountName);
             
             if (!existingAccount) {
@@ -448,7 +449,7 @@ class MoneyToon {
                 const token = await this.userLogin(query);
                 
                 if (token) {
-                    tokens.push({ first_name: accountName, token });
+                    tokens.push(token);
                     await this.saveTokens(tokens);
                     this.log(chalk.green(`Successfully generated token for ${accountName}`));
                 } else {
@@ -456,10 +457,39 @@ class MoneyToon {
                 }
             }
         }
-
-        // Process each account
-        for (let i = 0; i < tokens.length; i++) {
-            await this.processAccount(tokens[i], i);
+        
+        while (true) {
+            try {
+                runCount++;
+                this.log(chalk.cyan(`Starting run #${runCount}`));
+                
+                // Process each account
+                for (let i = 0; i < tokens.length; i++) {
+                    try {
+                        await this.processAccount(tokens[i], i);
+                    } catch (error) {
+                        this.log(chalk.red(`Error processing account ${tokens[i].first_name}: ${error.message}`));
+                        continue;
+                    }
+                }
+                
+                // Calculate next run time
+                const now = new Date();
+                const nextRun = new Date(now.getTime() + 60 * 60 * 1000); // 1 hour later
+                
+                this.log(chalk.blue('-----------------------------------'));
+                this.log(chalk.green('✓ All tasks completed successfully'));
+                this.log(chalk.yellow(`Next run scheduled at: ${nextRun.toLocaleTimeString()}`));
+                this.log(chalk.blue('-----------------------------------'));
+                
+                // Wait for 1 hour before next check
+                await new Promise(resolve => setTimeout(resolve, 60 * 60 * 1000));
+                
+            } catch (error) {
+                this.log(chalk.red(`Error in main loop: ${error.message}`));
+                this.log(chalk.yellow('Retrying in 5 minutes...'));
+                await new Promise(resolve => setTimeout(resolve, 5 * 60 * 1000));
+            }
         }
     }
 }
