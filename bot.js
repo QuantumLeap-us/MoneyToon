@@ -6,18 +6,24 @@ const moment = require('moment-timezone');
 class MoneyToon {
     constructor() {
         this.proxies = [];
+        this.currentProxyIndex = 0;
         this.headers = {
             'Accept': 'application/json, text/plain, */*',
-            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept-Language': 'zh-HK,zh-TW;q=0.9,zh;q=0.8',
             'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+            'Content-Type': 'application/json',
+            'Cookie': 'AWSALBCORS=hIsD6AmysgBOHSlBB2eihj+qIw8qMYGQHTt2QXUNo+KSx5rCU9kEGFLiRzMbKSpkpUfGg0Q7JTL79QBJ6pSsGMhoco5QAehkVrM68/B+iVZO3R+fZAuumtjqC04O',
             'Host': 'mt.promptale.io',
             'Origin': 'https://mt.promptale.io',
             'Pragma': 'no-cache',
             'Referer': 'https://mt.promptale.io/',
+            'Sec-CH-UA': '"Chromium";v="130", "Google Chrome";v="130", "Not?A_Brand";v="99"',
+            'Sec-CH-UA-Mobile': '?0',
+            'Sec-CH-UA-Platform': '"Windows"',
             'Sec-Fetch-Dest': 'empty',
             'Sec-Fetch-Mode': 'cors',
             'Sec-Fetch-Site': 'same-origin',
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36 Edg/128.0.0.0'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36'
         };
     }
 
@@ -43,42 +49,42 @@ class MoneyToon {
         }
     }
 
+    getNextProxy() {
+        if (this.proxies.length === 0) {
+            return null;
+        }
+        const proxy = this.proxies[this.currentProxyIndex];
+        this.currentProxyIndex = (this.currentProxyIndex + 1) % this.proxies.length;
+        return proxy;
+    }
+
     createAxiosInstance(token, accountIndex) {
         const config = {
             baseURL: 'https://mt.promptale.io',
             headers: {
-                'Accept': 'application/json, text/plain, */*',
-                'Accept-Language': 'en-US,en;q=0.9',
-                'Authorization': `Bearer ${token}`,
-                'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
-                'Content-Type': 'application/json',
-                'Host': 'mt.promptale.io',
-                'Origin': 'https://mt.promptale.io',
-                'Pragma': 'no-cache',
-                'Referer': 'https://mt.promptale.io/',
-                'Sec-Fetch-Dest': 'empty',
-                'Sec-Fetch-Mode': 'cors',
-                'Sec-Fetch-Site': 'same-origin',
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0'
+                ...this.headers,
+                'Authorization': token ? `Bearer ${token}` : ''
             },
             timeout: 30000  // Increase timeout to 30 seconds
         };
 
         // Use proxy
-        if (this.proxies.length > 0 && accountIndex < this.proxies.length) {
-            const proxy = this.proxies[accountIndex].trim();
-            try {
-                const [host, port] = proxy.split(':');
-                if (host && port) {
-                    config.proxy = {
-                        host: host,
-                        port: parseInt(port),
-                        protocol: 'http'  // Specify protocol
-                    };
-                    this.log(chalk.blue(`Account ${accountIndex + 1} using proxy: ${host}:${port}`));
+        if (this.proxies.length > 0) {
+            const proxy = this.getNextProxy();
+            if (proxy) {
+                try {
+                    const [host, port] = proxy.split(':');
+                    if (host && port) {
+                        config.proxy = {
+                            host: host,
+                            port: parseInt(port),
+                            protocol: 'http'  // Specify protocol
+                        };
+                        this.log(chalk.blue(`Using proxy: ${host}:${port}`));
+                    }
+                } catch (error) {
+                    this.log(chalk.red(`Invalid proxy format: ${proxy}`));
                 }
-            } catch (error) {
-                this.log(chalk.red(`Invalid proxy format for account ${accountIndex + 1}: ${proxy}`));
             }
         }
 
@@ -114,15 +120,14 @@ class MoneyToon {
                 .filter(line => line.length > 0);
             
             if (queries.length === 0) {
-                this.log(chalk.red('No accounts found in query.txt'));
+                this.log(chalk.yellow('No accounts found in query.txt'));
             } else {
                 this.log(chalk.green(`Found ${queries.length} accounts in query.txt`));
             }
-            
             return queries;
         } catch (error) {
             if (error.code === 'ENOENT') {
-                this.log(chalk.red('query.txt file not found. Please create it with your account information.'));
+                this.log(chalk.red('query.txt not found'));
             } else {
                 this.log(chalk.red(`Error loading queries: ${error.message}`));
             }
@@ -180,14 +185,22 @@ class MoneyToon {
 
         for (let attempt = 0; attempt < retries; attempt++) {
             try {
-                const instance = this.createAxiosInstance();
+                const instance = this.createAxiosInstance(null, attempt);
                 const response = await instance.post(url, data);
-                return response.data.data.accessToken;
+                if (response.data && response.data.data && response.data.data.accessToken) {
+                    this.log(chalk.green(`Successfully obtained token`));
+                    return response.data.data.accessToken;
+                }
+                throw new Error('Invalid response format');
             } catch (error) {
                 if (attempt < retries - 1) {
-                    this.log(chalk.red(`HTTP ERROR: ${error.message}`));
-                    this.log(chalk.yellow(`Proxy details: ${JSON.stringify(this.getNextProxy())}`));
+                    const proxy = this.getNextProxy(attempt);
+                    if (proxy) {
+                        this.log(chalk.yellow(`Retrying with proxy: ${proxy}`));
+                    }
                     await new Promise(resolve => setTimeout(resolve, 2000));
+                } else {
+                    this.log(chalk.red(`Failed to login after ${retries} attempts`));
                 }
             }
         }
